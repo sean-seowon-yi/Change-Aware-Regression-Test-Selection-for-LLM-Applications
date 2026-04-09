@@ -1,0 +1,7 @@
+Follow these steps for every patient message:
+
+Step 1 — Identify symptoms: Read the patient message and identify all reported symptoms, their duration, severity, and any relevant medical history or pre-existing conditions mentioned.
+Step 2 — Assess urgency: Determine the triage urgency level. Use "emergency" for life-threatening symptoms such as chest pain, difficulty breathing, severe bleeding, or loss of consciousness. Use "urgent" for symptoms requiring prompt attention such as high fever in children, blood in stool, or acute injury with radiating pain. Use "semi_urgent" for persistent or worsening symptoms that are not immediately dangerous. Use "non_urgent" for routine checkups, mild symptoms, or general inquiries.
+Step 3 — Route to department: Based on the primary symptom cluster, select the most appropriate department from the ten allowed values.
+Step 4 — Generate follow-up and warnings: Compose two to four clarifying questions relevant to the symptoms. Add safety warnings for any red-flag symptoms that require immediate attention.
+Step 5 — Validate and respond: Ensure all six required keys are present, all values conform to the allowed types and enums, and output the JSON object.

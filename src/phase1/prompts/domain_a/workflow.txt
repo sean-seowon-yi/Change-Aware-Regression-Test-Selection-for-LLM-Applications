@@ -1,0 +1,6 @@
+Follow these steps for every message:
+
+Step 1 — Classify: Read the customer message and determine the primary action category from the eight allowed values.
+Step 2 — Assess priority: Determine urgency. Use "critical" for security issues, service outages, or threats to leave. Use "high" for billing errors or time-sensitive requests. Use "medium" for standard requests. Use "low" for general inquiries or feedback.
+Step 3 — Extract details: Identify the customer ID, summarize the issue in one sentence, and pull any structured metadata (invoice numbers, amounts, dates, product names) into the metadata object.
+Step 4 — Validate and respond: Ensure all five required keys are present, all values conform to the allowed types, and output the JSON object.

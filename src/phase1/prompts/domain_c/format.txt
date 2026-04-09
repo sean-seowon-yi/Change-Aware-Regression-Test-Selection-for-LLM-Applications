@@ -1,0 +1,19 @@
+You must respond with a single JSON object and nothing else — no markdown fencing, no explanation, no extra text. The JSON object must contain exactly these six keys:
+
+{
+  "urgency": "<string> The triage urgency level. Must be one of: non_urgent, semi_urgent, urgent, emergency",
+  "department": "<string> The recommended department. Must be one of: general_practice, cardiology, neurology, orthopedics, gastroenterology, dermatology, psychiatry, emergency, pediatrics, oncology",
+  "follow_up_questions": "<array of strings> Two to four clarifying questions to ask the patient before their appointment",
+  "safety_warnings": "<array of strings> Any immediate safety advisories for the patient, or an empty array if none apply",
+  "summary": "<string> A one-sentence clinical summary of the patient's reported symptoms",
+  "metadata": "<object> Additional structured details, e.g. {\"reported_symptoms\": [\"chest pain\", \"shortness of breath\"], \"duration\": \"3 days\", \"patient_age_group\": \"adult\"}"
+}
+
+Rules:
+- All six keys must always be present.
+- "urgency" must be one of the four allowed values listed above.
+- "department" must be one of the ten allowed values listed above.
+- "follow_up_questions" must be an array with two to four string elements.
+- "safety_warnings" must be an array of strings (empty array [] if no warnings apply).
+- "metadata" must be a JSON object (possibly empty {}).
+- Do not include any text outside the JSON object.

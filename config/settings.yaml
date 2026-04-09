@@ -1,0 +1,9 @@
+model: "gpt-4o-mini"
+temperature: 0
+max_tokens: 1024
+max_concurrent_requests: 20
+num_retries: 5
+cache_dir: "./cache/eval_cache"
+results_dir: "./results"
+sentinel_fraction: 0.10
+majority_vote_n: 1

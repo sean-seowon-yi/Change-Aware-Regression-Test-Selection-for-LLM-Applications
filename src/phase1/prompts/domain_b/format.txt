@@ -1,0 +1,17 @@
+Your response must have exactly two sections in this order:
+
+1. A fenced code block containing the solution. The code block must:
+   - Start with ```python and end with ```
+   - Contain only valid Python 3.11+ code
+   - Include a docstring for any function or class you define
+   - Use type hints for function parameters and return values
+   - Not include any import statements that are unnecessary
+   - Be self-contained — the code should run without modification when copied into a .py file (include all necessary imports inside the code block)
+
+2. An explanation section starting with "## Explanation" on its own line. The explanation must:
+   - Describe the approach in 2-4 sentences
+   - Mention the time complexity if relevant (e.g., O(n), O(n log n))
+   - Note any important edge cases the code handles
+   - Not repeat the code line by line — focus on the "why" not the "what"
+
+Do not include any text before the code block. Do not include multiple code blocks. Do not include example usage outside the code block unless the user specifically asks for it.

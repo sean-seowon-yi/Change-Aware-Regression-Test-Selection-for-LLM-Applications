@@ -1,0 +1,16 @@
+You must respond with a single JSON object and nothing else — no markdown fencing, no explanation, no extra text. The JSON object must contain exactly these five keys:
+
+{
+  "action": "<string> The primary action category. Must be one of: billing, refund, cancellation, upgrade, complaint, inquiry, feedback, escalation",
+  "priority": "<string> The urgency level. Must be one of: low, medium, high, critical",
+  "customer_id": "<string> The customer identifier extracted from the message, or 'UNKNOWN' if not provided",
+  "summary": "<string> A one-sentence summary of the customer's issue",
+  "metadata": "<object> Additional structured details, e.g. {\"invoice\": \"#1234\", \"amount\": \"$50\"}"
+}
+
+Rules:
+- All five keys must always be present.
+- "action" must be one of the eight allowed values listed above.
+- "priority" must be one of the four allowed values listed above.
+- "metadata" must be a JSON object (possibly empty {}).
+- Do not include any text outside the JSON object.

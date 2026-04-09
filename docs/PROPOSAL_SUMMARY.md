@@ -139,7 +139,7 @@ Each test case is tagged with the **monitor types** it exercises and the **promp
 - If the test's assertion checks for specific formatting → tag `format_sensitive`
 - If the test was added as a regression for a known failure → tag with the failure's root cause section
 
-**Tagging method (learned, Phase 2):**
+**Tagging method (ablation-based sensitivity, Phase 3 prep):**
 - Run each test with ablated prompts (remove one section at a time) and record which ablations flip the outcome. This directly measures section sensitivity per test.
 
 ```python
@@ -174,7 +174,7 @@ Train a classifier: given `(change_features, test_features) → P(outcome_change
 
 ### 3.5 Sentinel Sampler
 
-From the tests **not** in the predicted impact set, draw a random sample of `max(5, 0.1 * |T \ S_predicted|)` tests. These are the canary tests. If any sentinel test regresses, the impact model was wrong — escalate to full rerun.
+From the tests **not** in the predicted impact set, draw a random sample of size `max(5, ⌈0.10 × |T \ S_predicted|⌉)` (10% of the non-predicted pool, at least five tests). Implemented as `sample_sentinels` in `src/phase2/sentinel.py`. If any sentinel test regresses, the impact model was wrong — escalate to full rerun.
 
 This is the safety net. It makes the system **fail-safe**: the worst case is running the full suite (same as today), not silently missing a regression.
 
@@ -201,24 +201,22 @@ For expensive models (GPT-4o at $0.016/call): full rerun = $4.80/PR = $480/month
 
 **Goal:** Build the eval harness, generate the data, and establish the "full rerun" baseline.
 
+**As implemented in this repository:** three benchmark domains (**domain_a**, **domain_b**, **domain_c**), **70** prompt versions each (v01–v70), ground truth under `results/baseline/`. Primary baseline runner: OpenAI Batch API (`python -m scripts.run_batch_baseline`). See [`PHASE1.md`](PHASE1.md) and [`EVALUATION_RESULTS.md`](EVALUATION_RESULTS.md).
+
 **Deliverables:**
 
-1. **Two domain applications with prompts and eval suites:**
-   - **Domain A: JSON extraction bot.** System prompt (~3,000 tokens) with role, format (JSON schema with 5 required keys), 8 few-shot examples, 2 policy sections. Eval suite: 100 test cases covering schema validation, key completeness, value correctness, edge cases.
-   - **Domain B: Coding assistant.** System prompt (~4,000 tokens) with role, format (code block + explanation), 6 demonstrations, 3 workflow sections. Eval suite: 80 test cases covering compilation, unit tests, style checks.
+1. **Three domain applications with prompts and eval suites:**
+   - **Domain A: JSON extraction bot.** Large system prompt with role, format (JSON schema), demonstrations, policy. Eval suite: **100** tests.
+   - **Domain B: Coding assistant.** Prompt with role, format, demonstrations, workflow. Eval suite: **80** tests.
+   - **Domain C: Third scenario family** (distinct base prompt and suite). Eval suite: **90** tests.
 
-2. **Version history generator:** Script that produces prompt versions by applying controlled mutations:
-   - Format changes: add/remove/rename required keys, change serialization rules
-   - Demo changes: add/remove/swap individual examples, edit example outputs
-   - Policy changes: strengthen/weaken refusal wording, add/remove policy clauses
-   - Workflow changes: reorder steps, add/remove steps
-   - Role changes: rephrase persona, change tone
-   - Compound changes: 2–3 simultaneous section edits
-   - Target: **50 versions per domain** (100 total)
+2. **Version history generator:** Script that produces prompt versions by applying controlled mutations (`scripts/generate_versions.py`, mutators in `src/phase1/prompts/`):
+   - Format, demo, policy, workflow, role, compound edits (see `PHASE1.md` for taxonomy)
+   - **70 versions per domain** in the shipped dataset (210 versions total)
 
-3. **Full-rerun baseline:** Run the complete eval suite on every version pair `(P, P')`. Record `outcome(P, t_i)` and `outcome(P', t_i)` for all tests. This gives the ground truth impact set `I(Δ)` for every change.
+3. **Full-rerun baseline:** Run the complete eval suite on the base prompt and on each version. Record pass/fail vs. the **prior-version baseline** for labeling (see Phase 1 doc). This yields per-version impact sets for Phases 2–3.
 
-4. **Baseline metrics:** Total calls, total cost, wall-clock time for full rerun.
+4. **Baseline metrics:** Total calls, total cost, wall-clock time (summarized per domain in `summary_domain_*.json`).
 
 **Tech stack:**
 
@@ -228,8 +226,9 @@ For expensive models (GPT-4o at $0.016/call): full rerun = $4.80/PR = $480/month
 | LLM calls | `litellm` (unified API interface) |
 | Eval framework | Promptfoo (YAML configs) or custom lightweight harness |
 | Caching | SQLite via `diskcache`, keyed by `sha256(prompt + input + model)` |
-| CLI | `typer` |
-| Embeddings | `all-MiniLM-L6-v2` via `sentence-transformers` (local, free) |
+| CLI | `typer` (`scripts/*.py`) |
+| Embeddings | `all-MiniLM-L6-v2` via `sentence-transformers` (local); PCA-reduced in Phase 3 |
+| Boosted trees | `lightgbm`, `xgboost` (Phase 3) |
 
 ---
 
@@ -247,30 +246,30 @@ For expensive models (GPT-4o at $0.016/call): full rerun = $4.80/PR = $480/month
 
 4. **Rule-based impact predictor:** The affinity table from Section 3.4.
 
-5. **Sentinel sampler:** Random 10% of non-selected tests.
+5. **Sentinel sampler:** `max(5, ⌈10%⌉)` of the non-predicted test pool (`src/phase2/sentinel.py`).
 
 6. **Selector + runner:** Select tests, run them, compare to baseline, escalate if sentinel catches regressions.
 
 **Evaluation at this phase:**
-- For each of the 100 version pairs, compare `S(Δ)` to `I(Δ)`.
+- For each version in each domain (e.g. **70 × 3** in the full benchmark), compare `S(Δ)` to `I(Δ)`.
 - Measure: **recall** (did we select all regressed tests?), **call reduction** (what % of tests did we skip?), **false omissions** (regressed tests we missed), **sentinel catch rate** (how often did the sentinel detect a missed regression?).
 
 ---
 
 ### Phase 3: Learned Selector (Weeks 5–7)
 
-**Goal:** Replace rule-based impact prediction with a learned model trained on Phase 1 ground truth data.
+**Goal:** Replace rule-based impact prediction with learned models trained on Phase 1 ground truth.
 
 **Deliverables:**
 
-1. **Sensitivity profiling (one-time offline):** For each test, run it with each section individually ablated (replaced with a generic placeholder). Record which ablations flip the outcome. This produces a per-test sensitivity vector: `test_i is sensitive to [format, demo:ex3, policy]`. Cost: `N_tests × M_sections` LLM calls (for Domain A: 100 × 8 = 800 calls = $0.80 with GPT-4o-mini). Run once.
+1. **Sensitivity profiling (optional offline):** Section ablations per test via `scripts/run_ablation.py`; vectors in `data/{domain}/sensitivity_profiles.json` when generated.
 
-2. **Learned impact predictor:** Logistic regression or gradient-boosted trees (`lightgbm`) over features:
+2. **Learned impact predictor:** **LightGBM**, **XGBoost**, and **logistic regression** (`src/phase3/`) over features:
    - Change features: unit_type (one-hot), change_type, magnitude, content embedding
    - Test features: monitor_type, sensitivity vector, test input embedding
    - Pairwise features: cosine similarity between change content and test input
    - Target: `P(outcome_changes | change, test)`
-   - Training data: the 100 version pairs × 100–180 tests per pair = 10,000–18,000 labeled examples from Phase 1.
+   - Training data: Phase 1 ground truth at **(version, test)** granularity — on the order of **tens of thousands** of labeled rows across three domains (see `src/phase3/dataset.py`).
 
 3. **Threshold tuning:** Choose the classification threshold to target recall ≥ 0.95 on a held-out validation set. The threshold controls the conservatism: lower threshold = more tests selected = higher recall, lower reduction.
 
@@ -301,7 +300,7 @@ For expensive models (GPT-4o at $0.016/call): full rerun = $4.80/PR = $480/month
 |---|---|
 | **Regression detection recall** | `\|I(Δ) ∩ S(Δ)\| / \|I(Δ)\|` — fraction of actual regressions caught |
 | **Call reduction rate** | `1 - \|S(Δ)\| / \|T\|` — fraction of tests skipped |
-| **False omission rate** | `\|I(Δ) \ S(Δ)\| / \|I(Δ)\|` — fraction of regressions missed |
+| **False omission rate** | Among tests **not** selected: `\|I(Δ) ∩ (T \ S)\| / \|T \ S\|` — risk in the skipped pool (see `src/phase2/evaluator.py`) |
 | **Sentinel escalation rate** | Fraction of changes where sentinel catches a missed regression and triggers full rerun |
 | **Cost savings** | Dollar amount saved per PR and per month vs. full rerun |
 | **Wall-clock reduction** | Time saved (parallel calls bounded by rate limits) |
@@ -313,7 +312,7 @@ For expensive models (GPT-4o at $0.016/call): full rerun = $4.80/PR = $480/month
 | **Full rerun** | Run all tests. 100% recall, 0% reduction. The upper bound on cost and lower bound on risk. |
 | **Random selection (50%)** | Run a random 50% of tests. Change-agnostic. Shows whether any selection is better than random. |
 | **Monitor-type heuristic** | Run only tests whose monitor type matches the changed section family. No learned component. |
-| **Cer-Eval (adapted)** | Apply Cer-Eval's partition-based subset selection as a change-agnostic baseline. |
+| **Cer-Eval (adapted)** | *Planned comparison;* not wired in the current codebase. Implemented baselines: full rerun, random 50%, monitor heuristic, Phase 2 rules. |
 | **Manual `--filter-metadata`** | Simulate a human using Promptfoo's tag filtering to select tests manually. |
 
 **Ablation studies:**
@@ -331,12 +330,12 @@ For expensive models (GPT-4o at $0.016/call): full rerun = $4.80/PR = $480/month
 
 | Item | Count | Source |
 |---|---|---|
-| Domain applications | 2 | Hand-built |
-| Prompt versions per domain | 50 | Scripted mutations |
-| Version pairs with ground truth | 100 | Full-rerun results |
-| Tests per domain | 80–100 | Hand-written + generated |
-| Labeled (change, test, outcome) triples | ~10,000–18,000 | Automatic from full reruns |
-| Sensitivity profiles per test | 80–100 per domain | Ablation runs (one-time) |
+| Domain applications | 3 | Hand-built (`domain_a`, `domain_b`, `domain_c`) |
+| Prompt versions per domain | 70 | Scripted mutations (v01–v70) |
+| Versions with ground truth | 210 total | Full-rerun / batch baseline |
+| Tests per domain | 100 / 80 / 90 | YAML eval suites |
+| Labeled (version, test) outcomes | ~19k+ rows | From Phase 1 JSONL; expanded with features in Phase 3 |
+| Sensitivity profiles | Optional | `sensitivity_profiles.json` per domain if ablation script run |
 
 **No external data needed.** The ground truth is a byproduct of running the system. No manual annotation, no production partners, no synthetic circularity.
 
@@ -346,10 +345,10 @@ For expensive models (GPT-4o at $0.016/call): full rerun = $4.80/PR = $480/month
 
 | Phase | Deliverable | Week |
 |---|---|---|
-| 1 | Two domain apps + eval suites + 100 version pairs + full-rerun ground truth | 3 |
-| 2 | Change classifier + rule-based selector + baseline metrics | 5 |
-| 3 | Learned selector + threshold tuning + ablations | 7 |
-| 4 | Full evaluation + paper | 9 |
+| 1 | Three domain apps + eval suites + 70 versions/domain + full-rerun ground truth | 3 |
+| 2 | Change classifier + rule-based selector + evaluator + sweep | 5 |
+| 3 | Learned selectors (LGBM, XGB, logreg) + version holdout / k-fold / cross-domain eval | 7 |
+| 4 | Unified analysis, statistics, figures, cost projections (`run_phase4_analysis`) | 9 |
 | Bonus | Promptfoo plugin prototype | 10 |
 
 ---
@@ -359,8 +358,8 @@ For expensive models (GPT-4o at $0.016/call): full rerun = $4.80/PR = $480/month
 **Why this is feasible:**
 - MVP is rule-based: change type → test tag lookup. No model training required.
 - Ground truth is free: full rerun generates labeled data automatically.
-- Two domains with 100 version pairs produce ~10,000+ labeled examples — enough for a learned model.
-- The LLM calls for data generation are cheap: 100 versions × 100 tests × $0.001 = $10 for GPT-4o-mini.
+- Three domains with 70 versions each produce **tens of thousands** of labeled (version, test) outcomes — enough for tree and linear models.
+- Batch baseline pricing depends on OpenAI Batch rates; see `EVALUATION_RESULTS.md` for observed run costs.
 - The entire data generation pipeline can run in a few hours with parallel API calls.
 
 **Risks and mitigations:**
@@ -381,6 +380,27 @@ For expensive models (GPT-4o at $0.016/call): full rerun = $4.80/PR = $480/month
 
 2. **A change-aware regression test selection algorithm.** A rule-based and learned selector that predicts impacted tests from change metadata, with conservative safety guarantees via sentinel sampling.
 
-3. **Empirical evidence.** Measurement of call reduction, recall, and cost savings across 100 version pairs in two domains, with ablations on selector type, sentinel size, change complexity, and non-determinism.
+3. **Empirical evidence.** Measurement of call reduction, recall, FOR, and cost projections across **three** domains, version-holdout and k-fold splits, cross-domain transfer, and parameter sweeps — summarized in [`EVALUATION_RESULTS.md`](EVALUATION_RESULTS.md).
 
 4. **Integration pathway.** A concrete design for a Promptfoo plugin that automates selective rerun on prompt PRs in CI/CD pipelines.
+
+---
+
+## 8. Future Work
+
+### 8.1 Online Learning via Predict–Measure–Retrain Loop
+
+The learned selector in Phase 3 is trained offline on a fixed ground truth dataset generated by full reruns. In a production deployment, however, each CI run produces new labeled examples — every test we run yields a fresh `(change, test, impacted)` observation. This creates an opportunity for an **online learning loop** analogous to the cost model refinement in TVM's AutoTVM [Chen et al. 2018], where an XGBoost model is iteratively retrained as it accumulates real measurements:
+
+1. A developer submits a prompt change.
+2. The selector predicts impacted tests and runs them (plus sentinels).
+3. The observed outcomes are fed back as new training examples.
+4. The model is periodically retrained on the accumulated data, improving its predictions over time.
+
+A key challenge is **partial observability**: unlike TVM, where every evaluated candidate produces a ground truth measurement, CARTS only observes outcomes for the tests it selects — skipped tests produce no signal. This can create a self-reinforcing bias where the model never learns about test sensitivities it has already decided to ignore. Three mechanisms mitigate this:
+
+- **Sentinel sampling** acts as an exploration arm (analogous to epsilon-greedy), providing ground truth from the unselected pool and detecting model blind spots.
+- **Periodic full reruns** (e.g., every 10th–20th PR) provide uncensored calibration data at modest cost — a 90–95% reduction in full-rerun frequency while maintaining model freshness.
+- **Uncertainty-driven selection** (active learning) can prioritize tests where the model is least confident, maximizing the information gained from each CI run.
+
+This online extension is complementary to the offline evaluation presented in this work and represents a natural path toward a self-improving, production-grade selector.
