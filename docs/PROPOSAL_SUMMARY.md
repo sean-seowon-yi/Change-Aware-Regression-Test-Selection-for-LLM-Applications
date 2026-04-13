@@ -201,7 +201,7 @@ For expensive models (GPT-4o at $0.016/call): full rerun = $4.80/PR = $480/month
 
 **Goal:** Build the eval harness, generate the data, and establish the "full rerun" baseline.
 
-**As implemented in this repository:** three benchmark domains (**domain_a**, **domain_b**, **domain_c**), **70** prompt versions each (v01–v70), ground truth under `results/baseline/`. Primary baseline runner: OpenAI Batch API (`python -m scripts.run_batch_baseline`). See [`PHASE1.md`](PHASE1.md) and [`EVALUATION_RESULTS.md`](EVALUATION_RESULTS.md).
+**As implemented in this repository:** three benchmark domains (**domain_a**, **domain_b**, **domain_c**), **70** prompt versions each (v01–v70), ground truth under `results/baseline/`. Primary baseline runner: OpenAI Batch API (`python -m scripts.run_batch_baseline run`, or `python -m scripts.run_phases phase1`). See [`PHASE1.md`](PHASE1.md), [`README.md`](../README.md), and [`EVALUATION_RESULTS.md`](EVALUATION_RESULTS.md).
 
 **Deliverables:**
 

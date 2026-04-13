@@ -42,7 +42,8 @@ Everything downstream (the change classifier, the selector, the learned model, t
 │           ├── batch_runner.py    # OpenAI Batch API baseline (primary for large runs)
 │           └── full_rerun.py      # synchronous full-rerun path
 ├── scripts/
-│   ├── run_batch_baseline.py      # Typer: --both for all domains
+│   ├── run_phases.py              # unified wrapper → same modules as below
+│   ├── run_batch_baseline.py      # Typer: run --both for all domains
 │   ├── run_baseline.py            # synchronous baseline helper
 │   └── generate_versions.py
 ├── results/baseline/              # ground_truth_domain_*.jsonl, summary_domain_*.json
@@ -233,7 +234,7 @@ Each test is tagged with the prompt features it depends on:
 
 ### 4.3 Prompt Version Generator (`src/phase1/prompts/mutator.py`)
 
-This is the script that produces 50 prompt versions per domain from the base prompt, using **controlled, typed mutations**.
+This is the machinery that produces prompt versions from the base prompt using **controlled, typed mutations**; the shipped benchmark has **70** versions per domain (v01–v70).
 
 #### 4.3.1 Mutation types
 
@@ -365,7 +366,7 @@ With caching (`diskcache`), repeated identical calls are free; wall-clock depend
 
 Phase 1 is **implemented** under `src/phase1/` with tests in `tests/`. Historical sprint checklist (minimal loop → three domains → 70 versions → batch baseline) is satisfied in-tree.
 
-**Validate end-to-end:** `python -m scripts.run_batch_baseline run --domain domain_a` (or `--both` for all domains) after setting `OPENAI_API_KEY`. Outputs: `results/baseline/ground_truth_domain_*.jsonl`, `summary_domain_*.json`.
+**Validate end-to-end:** `python -m scripts.run_batch_baseline run --domain domain_a` (or `run --both` for all domains) after setting `OPENAI_API_KEY`. Equivalent: `python -m scripts.run_phases phase1 --domain domain_a` or `phase1 --both`. Outputs: `results/baseline/ground_truth_domain_*.jsonl`, `summary_domain_*.json`.
 
 **Version generation:** `python -m scripts.generate_versions --help` (mutators in `src/phase1/prompts/mutator.py` and `llm_mutator.py`).
 

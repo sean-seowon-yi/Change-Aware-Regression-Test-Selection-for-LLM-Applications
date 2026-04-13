@@ -13,6 +13,7 @@ if _project_root not in sys.path:
     sys.path.insert(0, _project_root)
 
 from src.phase2.evaluator import (
+    effective_means_from_aggregate,
     run_evaluation,
     run_sweep,
     write_outputs,
@@ -36,7 +37,10 @@ def _print_summary(agg: dict) -> None:
     typer.echo(f"  {'-'*42}")
     typer.echo(f"  {'Recall (predictor only)':<30} {a['mean_recall_predictor']:>9.4f}")
     typer.echo(f"  {'Recall (with sentinel)':<30} {a['mean_recall_with_sentinel']:>9.4f}")
+    eff_r, eff_cr = effective_means_from_aggregate(a)
+    typer.echo(f"  {'Effective recall':<30} {eff_r:>9.4f}")
     typer.echo(f"  {'Call reduction':<30} {a['mean_call_reduction']:>9.4f}")
+    typer.echo(f"  {'Effective call reduction':<30} {eff_cr:>9.4f}")
     typer.echo(f"  {'False omission rate':<30} {a['mean_false_omission_rate']:>9.4f}")
     typer.echo(f"  {'Sentinel catch rate':<30} {a['sentinel_catch_rate']:>9.4f}")
 
@@ -111,18 +115,23 @@ def _print_summary(agg: dict) -> None:
 
 
 def _print_sweep(sweep: list[dict]) -> None:
-    typer.echo(f"\n  {'Sentinel%':>10} {'MagThresh':>10} {'RecallP':>10}"
-               f" {'RecallS':>10} {'Reduc':>10} {'FOR':>10}")
-    typer.echo(f"  {'-'*62}")
+    typer.echo(
+        f"\n  {'Sent%':>8} {'MagTh':>8} {'RecP':>8} {'RecS':>8} {'Reduc':>8}"
+        f" {'EffRec':>8} {'EffCR':>8} {'FOR':>8}"
+    )
+    typer.echo(f"  {'-'*72}")
     for row in sweep:
         a = row["aggregate"]
+        seff_r, seff_cr = effective_means_from_aggregate(a)
         typer.echo(
-            f"  {row['sentinel_fraction']:>10.2f}"
-            f" {row['magnitude_threshold']:>10.4f}"
-            f" {a['mean_recall_predictor']:>10.4f}"
-            f" {a['mean_recall_with_sentinel']:>10.4f}"
-            f" {a['mean_call_reduction']:>10.4f}"
-            f" {a['mean_false_omission_rate']:>10.4f}"
+            f"  {row['sentinel_fraction']:>8.2f}"
+            f" {row['magnitude_threshold']:>8.4f}"
+            f" {a['mean_recall_predictor']:>8.4f}"
+            f" {a['mean_recall_with_sentinel']:>8.4f}"
+            f" {a['mean_call_reduction']:>8.4f}"
+            f" {seff_r:>8.4f}"
+            f" {seff_cr:>8.4f}"
+            f" {a['mean_false_omission_rate']:>8.4f}"
         )
     typer.echo()
 

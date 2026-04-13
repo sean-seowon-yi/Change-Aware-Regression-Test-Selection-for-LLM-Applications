@@ -79,6 +79,7 @@ src/
     learned_predictor.py     # Drop-in replacement for rule-based predict_impacted()
     learned_selector.py      # Compose learned predictor + classifier + tagger + sentinel
 scripts/
+  run_phases.py              # wrapper: phase3-train / phase3-eval → scripts below
   run_ablation.py            # Run ablation sensitivity profiling (LLM calls)
   run_phase3_train.py        # CLI: train models with configurable splits
   run_phase3_eval.py         # CLI: evaluate learned selector via Phase 2 evaluator
@@ -322,6 +323,10 @@ All metrics are computed using the Phase 2 evaluator framework, ensuring exact c
 | **Sentinel catch rate** | `(# versions where sentinel caught a miss) / (# versions with any miss)` | How often the safety net fires |
 | **AUROC** | Area under receiver operating characteristic | Model discrimination quality (threshold-independent) |
 | **AUPRC** | Area under precision-recall curve | Better metric under class imbalance |
+| **Effective recall** | Version-level roll-up of Phase 2 semantics | If `sentinel_hit`, **1.0**; else recall (+sentinel) |
+| **Effective call reduction** | Version-level roll-up | If `sentinel_hit`, **0**; else call reduction |
+
+Phase 3 eval JSON mirrors Phase 2 (`mean_effective_recall`, `mean_effective_call_reduction` in aggregates; per-version fields in detail JSONL).
 
 ---
 

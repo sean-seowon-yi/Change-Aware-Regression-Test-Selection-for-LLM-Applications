@@ -95,10 +95,20 @@ def statistics() -> None:
             continue
         recalls = [r.get("recall_with_sentinel", r.get("recall_predictor", 0)) for r in recs]
         reductions = [r.get("call_reduction", 0) for r in recs]
+        eff_recalls = [r.get("effective_recall") for r in recs]
+        eff_crs = [r.get("effective_call_reduction") for r in recs]
         summaries[tag] = {
             "recall": metric_summary(recalls),
             "call_reduction": metric_summary(reductions),
         }
+        if all(v is not None for v in eff_recalls):
+            summaries[tag]["effective_recall"] = metric_summary(
+                [float(v) for v in eff_recalls],
+            )
+        if all(v is not None for v in eff_crs):
+            summaries[tag]["effective_call_reduction"] = metric_summary(
+                [float(v) for v in eff_crs],
+            )
     _write_json(summaries, _RESULTS_DIR / "metric_summaries.json")
     typer.echo(f"Computed metric summaries for {len(summaries)} configs.")
 
@@ -221,16 +231,31 @@ def cost_analysis() -> None:
 
     observed_cr = _load_observed_call_reduction()
     observed_esc = _load_observed_escalation_rate()
+    effective_cr = _load_effective_call_reduction()
 
     typer.echo(f"Using observed call_reduction={observed_cr:.4f}, escalation_rate={observed_esc:.4f}")
+    typer.echo(f"Using effective_call_reduction={effective_cr:.4f} (sentinel reruns baked in)")
 
     projections = project_all_scenarios(observed_cr, observed_esc)
     _write_json(projections, _RESULTS_DIR / "cost_projections.json")
 
-    typer.echo("\nCI/CD Cost Projections:")
+    typer.echo("\nCI/CD Cost Projections (single-pass model with escalation rate):")
     typer.echo(f"{'Scenario':30s} {'Full':>10s} {'CARTS':>10s} {'Savings':>10s} {'%':>8s}")
     typer.echo("-" * 72)
     for p in projections:
+        typer.echo(
+            f"{p['scenario']:30s} ${p['full_rerun_cost']:>9.2f} "
+            f"${p['carts_cost']:>9.2f} ${p['savings_absolute']:>9.2f} "
+            f"{p['savings_pct']:>7.1%}"
+        )
+
+    effective_projections = project_all_scenarios(effective_cr, 0.0)
+    _write_json(effective_projections, _RESULTS_DIR / "cost_projections_effective.json")
+
+    typer.echo("\nCI/CD Cost Projections (effective — sentinel reruns baked in):")
+    typer.echo(f"{'Scenario':30s} {'Full':>10s} {'CARTS':>10s} {'Savings':>10s} {'%':>8s}")
+    typer.echo("-" * 72)
+    for p in effective_projections:
         typer.echo(
             f"{p['scenario']:30s} ${p['full_rerun_cost']:>9.2f} "
             f"${p['carts_cost']:>9.2f} ${p['savings_absolute']:>9.2f} "
@@ -276,6 +301,41 @@ def _load_observed_call_reduction() -> float:
                 except Exception:
                     pass
     return best_cr if best_cr > 0 else 0.45
+
+
+def _load_effective_call_reduction() -> float:
+    """Load the best observed *effective* call reduction from results.
+
+    Effective CR already accounts for sentinel-triggered reruns (0.0 on
+    versions where sentinel fired), so cost projections using it should
+    set escalation_rate=0.
+    """
+    phase3_dir = _PROJECT_ROOT / "results" / "phase3"
+    best_cr = 0.0
+    if phase3_dir.exists():
+        for path in phase3_dir.glob("eval_*.json"):
+            try:
+                with open(path) as f:
+                    data = json.load(f)
+                cr = data.get("aggregate", {}).get("mean_effective_call_reduction", 0)
+                if cr > best_cr:
+                    best_cr = cr
+            except Exception:
+                pass
+    if best_cr == 0.0:
+        selection_dir = _PROJECT_ROOT / "results" / "selection"
+        for dom in _DOMAINS:
+            p = selection_dir / f"metrics_{dom}.json"
+            if p.exists():
+                try:
+                    with open(p) as f:
+                        data = json.load(f)
+                    cr = data.get("aggregate", {}).get("mean_effective_call_reduction", 0)
+                    if cr > best_cr:
+                        best_cr = cr
+                except Exception:
+                    pass
+    return best_cr if best_cr > 0 else 0.30
 
 
 def _load_observed_escalation_rate() -> float:
@@ -389,6 +449,8 @@ def _generate_f1_pareto(fig_dir: Path) -> None:
                         "threshold": entry.get("sentinel_fraction", 0),
                         "mean_recall_with_sentinel": agg.get("mean_recall_with_sentinel", 0),
                         "mean_call_reduction": agg.get("mean_call_reduction", 0),
+                        "mean_effective_recall": agg.get("mean_effective_recall"),
+                        "mean_effective_call_reduction": agg.get("mean_effective_call_reduction"),
                     })
                 if rule_curve:
                     threshold_data[domain]["rule_based"] = rule_curve
@@ -445,7 +507,9 @@ def _generate_f3_recall_by_change_type(fig_dir: Path) -> None:
         label = tag.replace("rule_based_", "rule_").replace("eval_", "")
         recalls_by_type = {}
         for ct, metrics in by_ct.items():
-            r = metrics.get("mean_recall_with_sentinel", metrics.get("mean_recall_predictor"))
+            r = metrics.get("mean_effective_recall")
+            if r is None:
+                r = metrics.get("mean_recall_with_sentinel", metrics.get("mean_recall_predictor"))
             if r is not None:
                 recalls_by_type[ct] = r
         if recalls_by_type:

@@ -37,6 +37,8 @@ This document ties **research goals**, **definitions**, **every numeric result**
 | **Call reduction** | `1 − selected_count / all_tests_count`. | Higher ⇒ fewer monitor/LLM calls per version. |
 | **FOR (false omission rate)** | Among tests **not** selected, the fraction that were **actually** impacted: `impacted ∩ not_selected` / `not_selected`. | Risk in the **skipped** pool; complements recall. Lower is better. |
 | **Sentinel catch rate** | When the predictor misses impacted tests, the fraction of those misses caught by sentinels (version-level aggregation in metrics JSON). | High catch rate ⇒ sentinels compensate for predictor gaps on that stratum. |
+| **Effective recall** | Per version: if a sentinel **caught** a predictor miss (`sentinel_hit`), treat recall as **1.0** (complement pass runs the rest of the suite); otherwise same as recall (+sentinel). | Models “run remaining tests after sentinel alarm” policy; see `compute_effective_metrics` in `src/phase2/evaluator.py`. |
+| **Effective call reduction** | Per version: **0** if `sentinel_hit` (no net skip vs full rerun after complement); otherwise same as call reduction. | Aggregated means appear as `mean_effective_*` in Phase 2–4 JSON; Phase 4 also writes `cost_projections_effective.json`. |
 
 **Baselines (Phase 2 `metrics_domain_*.json`, `baselines`):**
 
@@ -608,7 +610,7 @@ The pipeline also generates **45** data points varying suite size (50–1000) an
 
 ### 8.5 Loader note (code vs. committed JSON)
 
-`scripts/run_phase4_analysis.py` **cost-analysis** can set **call_reduction** from Phase 3 aggregates and **escalation_rate** from mean **sentinel_hit** rates in `detail_eval_*temporal*.jsonl` (capped). The **committed** `cost_projections.json` reflects the **snapshot** inputs (**0.9**, **0.3**). **Re-run** `python -m scripts.run_phase4_analysis cost-analysis` after pipeline changes to refresh dollars and percentages consistently.
+`scripts/run_phase4_analysis.py` **cost-analysis** can set **call_reduction** from Phase 3 aggregates and **escalation_rate** from mean **sentinel_hit** rates in `detail_eval_*temporal*.jsonl` (capped). It also emits **`cost_projections_effective.json`** using **mean effective call reduction** (sentinel-hit versions contribute 0). The **committed** `cost_projections.json` reflects the **snapshot** inputs (**0.9**, **0.3**). **Re-run** `python -m scripts.run_phase4_analysis cost-analysis` (or `python -m scripts.run_phases phase4 cost-analysis`) after pipeline changes to refresh dollars and percentages consistently.
 
 **Break-even (example):** With default CLI assumptions (overhead, latency, `cost_per_call=0.001`) and **r = 0.9**, **e = 0.3**, reported break-even suite size is **≈2.4** tests—an **order-of-magnitude** sanity check, not a deployment recommendation.
 
@@ -793,13 +795,28 @@ The cost projections in §8 assume suites of 100–500 tests. At larger scales:
 | 1 | `results/baseline/ground_truth_domain_*.jsonl`, `summary_domain_*.json` |
 | 2 | `results/selection/metrics_domain_*.json`, `sweep_domain_*.json`, `detail_domain_*.jsonl` |
 | 3 | `models/*.pkl`, `eval_summary.json`, `comparison_summary.json`, `kfold_summary.json`, `training_summary.json`, `detail_eval_*.jsonl` |
-| 4 | `main_results.json`, `metric_summaries.json`, `statistical_tests.json`, `cost_projections.json`, `cost_curves.json`, `feature_importance.json`, `cross_domain_matrix.json`, `by_change_type.json`, `detail_record_counts.json`, `figures/*.png`, `tables/*.tex` |
+| 4 | `main_results.json`, `metric_summaries.json`, `statistical_tests.json`, `cost_projections.json`, `cost_projections_effective.json`, `cost_curves.json`, `feature_importance.json`, `cross_domain_matrix.json`, `by_change_type.json`, `detail_record_counts.json`, `figures/*.png`, `tables/*.tex` |
 
 ### 12.4 Reproduction commands
 
+**Unified entry point** (each subcommand spawns the same module invocations as below):
+
 ```bash
-python -m scripts.run_batch_baseline --both
-python -m scripts.run_evaluation --all-domains --sweep
+python -m scripts.run_phases list
+python -m scripts.run_phases phase1 --both
+python -m scripts.run_phases phase2 --all-domains --sweep
+python -m scripts.run_phases phase3-train
+python -m scripts.run_phases phase3-eval
+python -m scripts.run_phases phase3-eval --kfold
+python -m scripts.run_phases phase3-eval --compare
+python -m scripts.run_phases phase4 full
+```
+
+**Direct scripts** (equivalent):
+
+```bash
+python -m scripts.run_batch_baseline run --both
+python -m scripts.run_evaluation evaluate --all-domains --sweep
 python -m scripts.run_phase3_train train-all
 python -m scripts.run_phase3_eval evaluate-all
 python -m scripts.run_phase3_eval kfold-evaluate-all
@@ -807,7 +824,7 @@ python -m scripts.run_phase3_eval compare
 python -m scripts.run_phase4_analysis full
 ```
 
-CLI details match `scripts/run_batch_baseline.py` (single command `run`, invoked as `python -m scripts.run_batch_baseline --both`), `scripts/run_evaluation.py` (`evaluate` is the only command; Typer may show options at top level), and `scripts/run_phase3_eval.py`. For **combined** k-fold only, use `python -m scripts.run_phase3_eval kfold-evaluate-combined --target-domain <domain>`.
+CLI details: `run_batch_baseline` uses subcommand **`run`**; `run_evaluation` uses **`evaluate`**; `run_phases phase2` requires `--all-domains` or `--domain <name>`. For **combined** k-fold only, use `python -m scripts.run_phase3_eval kfold-evaluate-combined --target-domain <domain>`.
 
 Use `python -m scripts.run_phase4_analysis full` **without** `--skip-ablations` if you need **T4/T8** ablation tables (slow).
 

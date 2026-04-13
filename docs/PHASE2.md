@@ -13,7 +13,7 @@ By the end of this phase we have:
 3. A **rule-based impact predictor** — an affinity table that maps change types to predicted test tags, producing a predicted impact set for any given change.
 4. A **sentinel sampler** — draws a random sample from tests *not* in the predicted set, providing a safety net against model blind spots.
 5. A **selector** — composes the impact predictor and sentinel sampler to produce the final selected set `S(Δ) = predicted ∪ sentinel`.
-6. An **evaluator** — runs the selector against **every version** in each domain (e.g. **70 × 3** in the full benchmark), compares `S(Δ)` to the true impact set `I(Δ)`, and reports recall, call reduction, false omission rate (among **non-selected** tests), and sentinel catch rate.
+6. An **evaluator** — runs the selector against **every version** in each domain (e.g. **70 × 3** in the full benchmark), compares `S(Δ)` to the true impact set `I(Δ)`, and reports recall, call reduction, false omission rate (among **non-selected** tests), sentinel catch rate, plus **effective recall** and **effective call reduction** (single-pass metrics unless a sentinel hit implies a complement full-suite pass — see §5.6).
 7. **Evaluation results** — metrics broken down by domain, change type, magnitude bucket, and category, plus baselines (full rerun, random 50%, monitor-type heuristic) and optional **parameter sweep** JSON (`sweep_domain_*.json`).
 
 Phase 3 replaces the rule-based impact predictor (item 3) with a learned model trained on the same ground truth. Everything else stays the same.
@@ -48,6 +48,7 @@ src/
     selector.py              # compose predictor + sentinel → SelectionResult
     evaluator.py             # evaluate selector against ground truth
 scripts/
+  run_phases.py              # wrapper: phase2 → run_evaluation evaluate …
   run_evaluation.py          # Typer: Phase 2 eval vs ground truth (--all-domains, --sweep)
   run_selection.py           # Ad hoc: run rule selector on chosen versions
 results/
@@ -380,6 +381,8 @@ For each version v in data/{domain}/versions/:
 | **False omission rate** | `\|I \ selected\| / \|I\|` | Fraction of impacted tests missed entirely |
 | **Sentinel catch rate** | `(# versions where sentinel caught a miss) / (# versions with any miss)` | How often the sentinel safety net fires |
 | **Escalation rate** | `(# versions where sentinel caught) / (total versions)` | How often we'd escalate to full rerun |
+| **Effective recall** | Per version: if `sentinel_hit`, treat as **1.0** (complement pass covers the suite); else same as recall (+sentinel) | Models deployment policy: sentinel regression → rerun remaining tests |
+| **Effective call reduction** | Per version: **0** if `sentinel_hit` (no net savings vs full rerun after complement); else same as call reduction | Paired with effective recall in `compute_effective_metrics` (`evaluator.py`) |
 
 **Aggregation dimensions:**
 - Per domain (domain_a, domain_b)
@@ -408,6 +411,8 @@ For each version v in data/{domain}/versions/:
     "mean_recall_with_sentinel": 0.95,
     "mean_call_reduction": 0.45,
     "mean_false_omission_rate": 0.05,
+    "mean_effective_recall": 0.93,
+    "mean_effective_call_reduction": 0.40,
     "sentinel_catch_rate": 0.60,
     "escalation_rate": 0.10,
     "versions_with_perfect_recall": 55
@@ -425,7 +430,7 @@ For each version v in data/{domain}/versions/:
 
 `results/selection/detail_{domain}.jsonl` (one line per version):
 ```json
-{"version_id": "v01", "changes": [...], "predicted_ids": [...], "sentinel_ids": [...], "impact_ids": [...], "recall": 1.0, "call_reduction": 0.47, "false_omissions": [], "sentinel_hit": false}
+{"version_id": "v01", "changes": [...], "predicted_ids": [...], "sentinel_ids": [...], "impact_ids": [...], "recall": 1.0, "call_reduction": 0.47, "false_omissions": [], "sentinel_hit": false, "effective_recall": 1.0, "effective_call_reduction": 0.47}
 ```
 
 ---
@@ -487,7 +492,7 @@ For each version v in data/{domain}/versions/:
 - [ ] Write `tests/test_selector.py`
   - Integration test: full pipeline from prompts to SelectionResult
 
-**Validation:** Run evaluation on all versions (e.g. `python -m scripts.run_evaluation --all-domains`). Verify:
+**Validation:** Run evaluation on all versions (e.g. `python -m scripts.run_evaluation evaluate --all-domains` or `python -m scripts.run_phases phase2 --all-domains`). Verify:
 - Every version produces a non-empty selected set
 - call_reduction is > 0 for most versions (we're skipping something)
 - For versions with 0 impacted tests, recall is trivially 1.0

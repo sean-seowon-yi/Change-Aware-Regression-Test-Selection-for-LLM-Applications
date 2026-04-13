@@ -14,7 +14,12 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-from src.phase4.analysis import bootstrap_ci, metric_summary, paired_comparison
+from src.phase4.analysis import (
+    bootstrap_ci,
+    metric_summary,
+    paired_comparison,
+    paired_recall_series,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -121,6 +126,8 @@ def build_main_results_table(all_results: dict) -> pd.DataFrame:
             "recall_predictor": agg.get("mean_recall_predictor"),
             "recall_with_sentinel": agg.get("mean_recall_with_sentinel"),
             "call_reduction": agg.get("mean_call_reduction"),
+            "effective_recall": agg.get("mean_effective_recall"),
+            "effective_call_reduction": agg.get("mean_effective_call_reduction"),
             "false_omission_rate": agg.get("mean_false_omission_rate"),
             "sentinel_catch_rate": agg.get("sentinel_catch_rate"),
             "n_versions": agg.get("total_versions", agg.get("count")),
@@ -187,16 +194,9 @@ def build_learned_vs_rule_table(detail_records: dict) -> pd.DataFrame:
                 if len(common) < 3:
                     continue
 
-                rule_recalls = [
-                    rule_by_vid[v].get("recall_with_sentinel",
-                                       rule_by_vid[v].get("recall_predictor", 0))
-                    for v in common
-                ]
-                learned_recalls = [
-                    learned_by_vid[v].get("recall_with_sentinel",
-                                          learned_by_vid[v].get("recall_predictor", 0))
-                    for v in common
-                ]
+                rule_recalls, learned_recalls = paired_recall_series(
+                    rule_by_vid, learned_by_vid, common,
+                )
 
                 comp = paired_comparison(learned_recalls, rule_recalls)
                 rule_summary = metric_summary(rule_recalls)
@@ -235,7 +235,9 @@ def build_cross_domain_matrix(all_results: dict) -> pd.DataFrame:
             continue
         if "cross" not in tag:
             continue
-        recall = agg.get("mean_recall_with_sentinel", agg.get("mean_recall_predictor"))
+        recall = agg.get("mean_effective_recall")
+        if recall is None:
+            recall = agg.get("mean_recall_with_sentinel", agg.get("mean_recall_predictor"))
         parts = tag.split("_")
         for i, p in enumerate(parts):
             if p == "cross":
@@ -285,6 +287,8 @@ def build_change_type_table(all_results: dict) -> pd.DataFrame:
                 "recall_predictor": metrics.get("mean_recall_predictor"),
                 "recall_with_sentinel": metrics.get("mean_recall_with_sentinel"),
                 "call_reduction": metrics.get("mean_call_reduction"),
+                "effective_recall": metrics.get("mean_effective_recall"),
+                "effective_call_reduction": metrics.get("mean_effective_call_reduction"),
             })
     return pd.DataFrame(rows)
 

@@ -119,6 +119,48 @@ class VersionMetrics:
     change_types_gt: list[str]
     magnitude_max: float
     mutation_category: str
+    effective_recall: float = 0.0
+    effective_call_reduction: float = 0.0
+
+
+def compute_effective_metrics(
+    *,
+    sentinel_hit: bool,
+    recall_with_sentinel: float,
+    call_reduction: float,
+) -> tuple[float, float]:
+    """Recall and call reduction after a sentinel-triggered complement pass.
+
+    ``sentinel_hit`` (eval): some impacted test was in ``sentinel_ids``, i.e. the
+    predictor missed it but it was in the sentinel sample — proxy for a sentinel
+    regression alarm.  Deployment policy: run every test *not* in the first-wave
+    ``selected_ids``.  That union is the full suite, so effective recall is 1.0 and
+    effective call reduction is 0 (no net skips vs full rerun).
+
+    When ``sentinel_hit`` is false, only the first wave runs; effective metrics match
+    single-pass ``recall_with_sentinel`` and ``call_reduction``.
+    """
+    if sentinel_hit:
+        return 1.0, 0.0
+    return recall_with_sentinel, call_reduction
+
+
+def effective_means_from_aggregate(aggregate: dict) -> tuple[float, float]:
+    """Read mean effective recall / CR from a saved aggregate, with legacy fallback.
+
+    Older ``metrics_*.json`` / ``eval_*.json`` may omit ``mean_effective_*``; use
+    single-pass ``mean_recall_with_sentinel`` and ``mean_call_reduction`` so CLIs
+    and comparisons stay consistent without crashing.
+    """
+    if not aggregate:
+        return 0.0, 0.0
+    er = aggregate.get("mean_effective_recall")
+    if er is None:
+        er = aggregate.get("mean_recall_with_sentinel", 0.0)
+    ecr = aggregate.get("mean_effective_call_reduction")
+    if ecr is None:
+        ecr = aggregate.get("mean_call_reduction", 0.0)
+    return float(er), float(ecr)
 
 
 def _version_to_category(version_id: str) -> str:
@@ -180,6 +222,12 @@ def evaluate_version(
     not_selected = res.total_tests - len(res.selected_ids)
     for_rate = len(missed) / not_selected if not_selected > 0 else 0.0
 
+    eff_recall, eff_call_reduction = compute_effective_metrics(
+        sentinel_hit=sentinel_caught,
+        recall_with_sentinel=recall_sel,
+        call_reduction=res.call_reduction,
+    )
+
     changes_info = [
         {
             "unit_type": c.change.unit_type,
@@ -210,6 +258,8 @@ def evaluate_version(
         change_types_gt=gt.change_types_by_version.get(version_id, []),
         magnitude_max=mag_max,
         mutation_category=_version_to_category(version_id),
+        effective_recall=eff_recall,
+        effective_call_reduction=eff_call_reduction,
     )
 
 
@@ -299,6 +349,10 @@ def _aggregate_group(metrics: list[VersionMetrics]) -> dict:
         "mean_recall_with_sentinel": round(_mean([m.recall_with_sentinel for m in metrics]), 4),
         "mean_call_reduction": round(_mean([m.call_reduction for m in metrics]), 4),
         "mean_false_omission_rate": round(_mean([m.false_omission_rate for m in metrics]), 4),
+        "mean_effective_recall": round(_mean([m.effective_recall for m in metrics]), 4),
+        "mean_effective_call_reduction": round(
+            _mean([m.effective_call_reduction for m in metrics]), 4,
+        ),
         "sentinel_catch_rate": round(
             sum(1 for m in metrics if m.sentinel_hit and m.num_impacted > 0 and m.recall_predictor < 1.0)
             / sum(1 for m in metrics if m.num_impacted > 0 and m.recall_predictor < 1.0),
@@ -538,6 +592,8 @@ def write_outputs(
                 "false_omission_rate": round(m.false_omission_rate, 4),
                 "false_omissions": m.false_omissions,
                 "sentinel_hit": m.sentinel_hit,
+                "effective_recall": round(m.effective_recall, 4),
+                "effective_call_reduction": round(m.effective_call_reduction, 4),
                 "magnitude_max": round(m.magnitude_max, 4),
                 "mutation_category": m.mutation_category,
             }

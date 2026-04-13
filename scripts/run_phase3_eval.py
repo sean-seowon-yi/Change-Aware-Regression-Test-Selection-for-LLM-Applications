@@ -35,6 +35,8 @@ from src.phase2.evaluator import (
     VersionMetrics,
     _version_to_category,
     aggregate_results,
+    compute_effective_metrics,
+    effective_means_from_aggregate,
     list_version_ids,
     load_base_prompt,
     load_ground_truth,
@@ -66,6 +68,16 @@ logger = logging.getLogger(__name__)
 _PROJECT_ROOT = Path(__file__).resolve().parents[1]
 _MODELS_DIR = _PROJECT_ROOT / "models"
 _RESULTS_DIR = _PROJECT_ROOT / "results" / "phase3"
+
+
+def _echo_learned_aggregate(a: dict) -> None:
+    typer.echo(f"  Recall (predictor): {a['mean_recall_predictor']:.3f}")
+    typer.echo(f"  Recall (w/ sentinel): {a['mean_recall_with_sentinel']:.3f}")
+    er, ecr = effective_means_from_aggregate(a)
+    typer.echo(f"  Effective recall: {er:.3f}")
+    typer.echo(f"  Effective call reduction: {ecr:.3f}")
+    typer.echo(f"  Call reduction: {a['mean_call_reduction']:.3f}")
+    typer.echo(f"  False omission rate: {a['mean_false_omission_rate']:.3f}")
 
 
 # ---------------------------------------------------------------------------
@@ -113,6 +125,12 @@ def _evaluate_version_learned(
     not_selected = res.total_tests - len(res.selected_ids)
     for_rate = len(missed) / not_selected if not_selected > 0 else 0.0
 
+    eff_recall, eff_call_reduction = compute_effective_metrics(
+        sentinel_hit=sentinel_caught,
+        recall_with_sentinel=recall_sel,
+        call_reduction=res.call_reduction,
+    )
+
     changes_info = [
         {
             "unit_type": c.change.unit_type,
@@ -143,6 +161,8 @@ def _evaluate_version_learned(
         change_types_gt=gt.change_types_by_version.get(version_id, []),
         magnitude_max=mag_max,
         mutation_category=_version_to_category(version_id),
+        effective_recall=eff_recall,
+        effective_call_reduction=eff_call_reduction,
     )
 
 
@@ -220,6 +240,8 @@ def _write_detail_jsonl(
                 "false_omission_rate": round(m.false_omission_rate, 4),
                 "false_omissions": m.false_omissions,
                 "sentinel_hit": m.sentinel_hit,
+                "effective_recall": round(m.effective_recall, 4),
+                "effective_call_reduction": round(m.effective_call_reduction, 4),
                 "magnitude_max": round(m.magnitude_max, 4),
                 "mutation_category": m.mutation_category,
             }
@@ -250,9 +272,13 @@ def _threshold_sensitivity(
     elif version_filter == "temporal_train":
         version_ids = [v for v in version_ids if int(re.search(r"\d+", v).group()) <= 50]
 
+    if not version_ids:
+        return []
+
     results = []
     for tau in thresholds:
         recalls, reductions = [], []
+        eff_recalls, eff_reductions = [], []
         for vid in version_ids:
             version_prompt = load_version_prompt(domain, vid)
             res = select_tests_learned(
@@ -269,11 +295,22 @@ def _threshold_sensitivity(
             recall = len(impacted & res.selected_ids) / n_i if n_i > 0 else 1.0
             recalls.append(recall)
             reductions.append(res.call_reduction)
+            sentinel_hit = len(impacted & res.sentinel_ids) > 0
+            er, ecr = compute_effective_metrics(
+                sentinel_hit=sentinel_hit,
+                recall_with_sentinel=recall,
+                call_reduction=res.call_reduction,
+            )
+            eff_recalls.append(er)
+            eff_reductions.append(ecr)
 
+        n = len(recalls)
         results.append({
             "threshold": tau,
-            "mean_recall_with_sentinel": round(sum(recalls) / len(recalls), 4),
-            "mean_call_reduction": round(sum(reductions) / len(reductions), 4),
+            "mean_recall_with_sentinel": round(sum(recalls) / n, 4),
+            "mean_call_reduction": round(sum(reductions) / n, 4),
+            "mean_effective_recall": round(sum(eff_recalls) / n, 4),
+            "mean_effective_call_reduction": round(sum(eff_reductions) / n, 4),
         })
     return results
 
@@ -582,20 +619,28 @@ def _build_comparison(domains: list[str] = None) -> dict:
         if p2_path.exists():
             with open(p2_path) as f:
                 p2 = json.load(f)
+            p2a = p2.get("aggregate", {})
+            er2, ecr2 = effective_means_from_aggregate(p2a)
             comparison[domain]["rule_based"] = {
-                "recall_predictor": p2.get("aggregate", {}).get("mean_recall_predictor"),
-                "recall_with_sentinel": p2.get("aggregate", {}).get("mean_recall_with_sentinel"),
-                "call_reduction": p2.get("aggregate", {}).get("mean_call_reduction"),
+                "recall_predictor": p2a.get("mean_recall_predictor"),
+                "recall_with_sentinel": p2a.get("mean_recall_with_sentinel"),
+                "call_reduction": p2a.get("mean_call_reduction"),
+                "effective_recall": er2,
+                "effective_call_reduction": ecr2,
             }
 
         for p3_file in sorted(_RESULTS_DIR.glob(f"eval_{domain}_*.json")):
             with open(p3_file) as f:
                 p3 = json.load(f)
             tag = p3.get("model_tag", p3_file.stem)
+            p3a = p3.get("aggregate", {})
+            er3, ecr3 = effective_means_from_aggregate(p3a)
             comparison[domain][tag] = {
-                "recall_predictor": p3.get("aggregate", {}).get("mean_recall_predictor"),
-                "recall_with_sentinel": p3.get("aggregate", {}).get("mean_recall_with_sentinel"),
-                "call_reduction": p3.get("aggregate", {}).get("mean_call_reduction"),
+                "recall_predictor": p3a.get("mean_recall_predictor"),
+                "recall_with_sentinel": p3a.get("mean_recall_with_sentinel"),
+                "call_reduction": p3a.get("mean_call_reduction"),
+                "effective_recall": er3,
+                "effective_call_reduction": ecr3,
                 "threshold": p3.get("threshold"),
                 "version_filter": p3.get("version_filter"),
             }
@@ -630,10 +675,7 @@ def evaluate(
 
     a = agg["aggregate"]
     typer.echo(f"\n{model_tag} on {domain} ({version_filter}):")
-    typer.echo(f"  Recall (predictor): {a['mean_recall_predictor']:.3f}")
-    typer.echo(f"  Recall (w/ sentinel): {a['mean_recall_with_sentinel']:.3f}")
-    typer.echo(f"  Call reduction: {a['mean_call_reduction']:.3f}")
-    typer.echo(f"  False omission rate: {a['mean_false_omission_rate']:.3f}")
+    _echo_learned_aggregate(a)
 
 
 @app.command()
@@ -696,6 +738,7 @@ def evaluate_all() -> None:
         _write_detail_jsonl(per_version, _RESULTS_DIR / f"detail_{out_tag}.jsonl")
 
         a = agg["aggregate"]
+        er, ecr = effective_means_from_aggregate(a)
         row = {
             "domain": domain,
             "model_tag": model_tag,
@@ -703,13 +746,16 @@ def evaluate_all() -> None:
             "recall_predictor": a["mean_recall_predictor"],
             "recall_with_sentinel": a["mean_recall_with_sentinel"],
             "call_reduction": a["mean_call_reduction"],
+            "mean_effective_recall": er,
+            "mean_effective_call_reduction": ecr,
             "false_omission_rate": a["mean_false_omission_rate"],
         }
         summary_rows.append(row)
         typer.echo(f"  {model_tag:40s} {domain:10s} {vf:15s} | "
                    f"rec={a['mean_recall_predictor']:.3f}  "
                    f"rec+s={a['mean_recall_with_sentinel']:.3f}  "
-                   f"cr={a['mean_call_reduction']:.3f}")
+                   f"cr={a['mean_call_reduction']:.3f}  "
+                   f"eff_r={er:.3f}  eff_cr={ecr:.3f}")
 
     summary_path = _RESULTS_DIR / "eval_summary.json"
     with open(summary_path, "w") as f:
@@ -736,10 +782,17 @@ def compare() -> None:
             rec = m.get("recall_predictor", "N/A")
             rec_s = m.get("recall_with_sentinel", "N/A")
             cr = m.get("call_reduction", "N/A")
+            eff_r = m.get("effective_recall", "N/A")
+            eff_cr = m.get("effective_call_reduction", "N/A")
             rec_str = f"{rec:.3f}" if isinstance(rec, float) else rec
             rec_s_str = f"{rec_s:.3f}" if isinstance(rec_s, float) else rec_s
             cr_str = f"{cr:.3f}" if isinstance(cr, float) else cr
-            typer.echo(f"  {tag:45s} | rec={rec_str}  rec+s={rec_s_str}  cr={cr_str}")
+            eff_r_str = f"{eff_r:.3f}" if isinstance(eff_r, float) else eff_r
+            eff_cr_str = f"{eff_cr:.3f}" if isinstance(eff_cr, float) else eff_cr
+            typer.echo(
+                f"  {tag:40s} | rec={rec_str}  rec+s={rec_s_str}  cr={cr_str}  "
+                f"eff_r={eff_r_str}  eff_cr={eff_cr_str}",
+            )
 
 
 @app.command()
@@ -756,8 +809,11 @@ def threshold_sensitivity(
     results = _threshold_sensitivity(domain, model_tag, thresholds, version_filter=version_filter)
 
     for r in results:
-        typer.echo(f"  τ={r['threshold']:.2f}: recall={r['mean_recall_with_sentinel']:.3f}  "
-                   f"cr={r['mean_call_reduction']:.3f}")
+        typer.echo(
+            f"  τ={r['threshold']:.2f}: rec+s={r['mean_recall_with_sentinel']:.3f}  "
+            f"cr={r['mean_call_reduction']:.3f}  "
+            f"eff_rec={r['mean_effective_recall']:.3f}  eff_cr={r['mean_effective_call_reduction']:.3f}"
+        )
 
     out_path = _RESULTS_DIR / f"threshold_sensitivity_{domain}_{model_tag}.json"
     with open(out_path, "w") as f:
@@ -791,10 +847,7 @@ def kfold_evaluate(
 
     a = agg["aggregate"]
     typer.echo(f"\n{model_type} on {domain} ({n_folds}-fold CV):")
-    typer.echo(f"  Recall (predictor): {a['mean_recall_predictor']:.3f}")
-    typer.echo(f"  Recall (w/ sentinel): {a['mean_recall_with_sentinel']:.3f}")
-    typer.echo(f"  Call reduction: {a['mean_call_reduction']:.3f}")
-    typer.echo(f"  False omission rate: {a['mean_false_omission_rate']:.3f}")
+    _echo_learned_aggregate(a)
 
 
 @app.command()
@@ -823,10 +876,7 @@ def kfold_evaluate_combined(
 
     a = agg["aggregate"]
     typer.echo(f"\nCombined k-fold: {model_type} -> {target_domain} ({n_folds}-fold CV):")
-    typer.echo(f"  Recall (predictor): {a['mean_recall_predictor']:.3f}")
-    typer.echo(f"  Recall (w/ sentinel): {a['mean_recall_with_sentinel']:.3f}")
-    typer.echo(f"  Call reduction: {a['mean_call_reduction']:.3f}")
-    typer.echo(f"  False omission rate: {a['mean_false_omission_rate']:.3f}")
+    _echo_learned_aggregate(a)
 
 
 @app.command()
@@ -875,6 +925,7 @@ def kfold_evaluate_all(
             json.dump(agg, f, indent=2)
 
         a = agg["aggregate"]
+        er, ecr = effective_means_from_aggregate(a)
         row = {
             "domain": domain,
             "model_type": mt,
@@ -883,12 +934,15 @@ def kfold_evaluate_all(
             "recall_predictor": a["mean_recall_predictor"],
             "recall_with_sentinel": a["mean_recall_with_sentinel"],
             "call_reduction": a["mean_call_reduction"],
+            "mean_effective_recall": er,
+            "mean_effective_call_reduction": ecr,
             "false_omission_rate": a["mean_false_omission_rate"],
         }
         summary_rows.append(row)
         typer.echo(f"  rec={a['mean_recall_predictor']:.3f}  "
                    f"rec+s={a['mean_recall_with_sentinel']:.3f}  "
-                   f"cr={a['mean_call_reduction']:.3f}")
+                   f"cr={a['mean_call_reduction']:.3f}  "
+                   f"eff_r={er:.3f}  eff_cr={ecr:.3f}")
 
     # --- Combined k-fold ---
     combined_configs = [
@@ -925,6 +979,7 @@ def kfold_evaluate_all(
             json.dump(agg, f, indent=2)
 
         a = agg["aggregate"]
+        er, ecr = effective_means_from_aggregate(a)
         row = {
             "domain": target_domain,
             "model_type": mt,
@@ -933,12 +988,15 @@ def kfold_evaluate_all(
             "recall_predictor": a["mean_recall_predictor"],
             "recall_with_sentinel": a["mean_recall_with_sentinel"],
             "call_reduction": a["mean_call_reduction"],
+            "mean_effective_recall": er,
+            "mean_effective_call_reduction": ecr,
             "false_omission_rate": a["mean_false_omission_rate"],
         }
         summary_rows.append(row)
         typer.echo(f"  rec={a['mean_recall_predictor']:.3f}  "
                    f"rec+s={a['mean_recall_with_sentinel']:.3f}  "
-                   f"cr={a['mean_call_reduction']:.3f}")
+                   f"cr={a['mean_call_reduction']:.3f}  "
+                   f"eff_r={er:.3f}  eff_cr={ecr:.3f}")
 
     summary_path = _RESULTS_DIR / "kfold_summary.json"
     with open(summary_path, "w") as f:

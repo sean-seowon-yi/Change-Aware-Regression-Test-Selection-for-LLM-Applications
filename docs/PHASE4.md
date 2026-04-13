@@ -75,6 +75,8 @@ All metrics are computed using the Phase 2 evaluator framework (`src/phase2/eval
 | **Sentinel catch rate** | (versions where sentinel caught) / (versions with any miss) | Safety net effectiveness |
 | **AUROC** | Area under ROC curve | Threshold-independent discrimination |
 | **AUPRC** | Area under precision-recall curve | Robust under class imbalance |
+| **Effective recall** | Mean of per-version effective recall (sentinel-hit → 1.0) | Aligns cost / Pareto plots with complement-pass policy |
+| **Effective call reduction** | Mean of per-version effective CR (sentinel-hit → 0) | Used in `cost_projections_effective.json` and some Phase 4 tables |
 
 ### 3.3 Aggregation Dimensions
 
@@ -258,13 +260,15 @@ Define a parameterized cost model for realistic CI/CD scenarios:
 C_full = P × N × c
 ```
 
-**CARTS cost per month:**
+**CARTS cost per month (single-pass reduction `r`):**
 ```
 C_carts = P × [(1 − e) × N × (1 − r) + e × N] × c
        = P × N × c × [1 − r × (1 − e)]
 ```
 
 The `(1 − e)` fraction of PRs uses the reduced suite; the `e` fraction escalates to full rerun.
+
+**Effective reduction:** When building `cost_projections_effective.json`, Phase 4 uses **mean effective call reduction** from aggregates (sentinel-hit versions contribute 0 reduction), so dollar savings reflect the same policy as effective recall in the evaluator.
 
 **Monthly savings:**
 ```
@@ -368,6 +372,7 @@ src/
     report_builder.py        # Collect all results, build unified comparison tables
     visualizations.py        # Generate all figures (matplotlib/seaborn)
 scripts/
+  run_phases.py              # wrapper: phase4 <step> → run_phase4_analysis …
   run_phase4_analysis.py     # CLI: run full Phase 4 analysis pipeline
 results/
   phase4/
@@ -376,7 +381,8 @@ results/
     feature_importance.json  # T3: per-domain feature rankings
     feature_ablation.json    # T4: ablation deltas
     cross_domain_matrix.json # T5: transfer matrix
-    cost_projections.json    # T6: scenario projections
+    cost_projections.json    # T6: scenario projections (single-pass r)
+    cost_projections_effective.json  # T6 variant using effective call reduction
     by_change_type.json      # T7: per-unit_type breakdown
     sentinel_analysis.json   # T8: sentinel fraction sweep
     statistical_tests.json   # All p-values, CIs, effect sizes
@@ -631,7 +637,7 @@ def full():
 
 ## 10. Implementation status
 
-The modules below exist in `src/phase4/` (`analysis.py`, `report_builder.py`, `visualizations.py`, `cost_model.py`, `ablations.py`) with `python -m scripts.run_phase4_analysis <command>`. The sprint checklist that follows is the original plan; treat unchecked items as **optional extensions** unless you are bootstrapping a new checkout.
+The modules below exist in `src/phase4/` (`analysis.py`, `report_builder.py`, `visualizations.py`, `cost_model.py`, `ablations.py`) with `python -m scripts.run_phase4_analysis <command>` or `python -m scripts.run_phases phase4 <step>`. The sprint checklist that follows is the original plan; treat unchecked items as **optional extensions** unless you are bootstrapping a new checkout.
 
 ### Sprint 1: Result Collection & Statistical Framework
 
@@ -832,7 +838,7 @@ By the end of this phase:
 4. **Cost projections** — concrete dollar savings for realistic CI/CD scenarios, with break-even analysis.
 5. **Publication-ready artifacts** — 7 figures (PNG) and 8 tables (JSON + LaTeX) ready for the final report.
 6. **Research question answers** — concrete, evidence-backed narrative for each of the 5 RQs.
-7. **A reproducible analysis pipeline** — `python -m scripts.run_phase4_analysis full` regenerates everything from scratch.
+7. **A reproducible analysis pipeline** — `python -m scripts.run_phase4_analysis full` (or `python -m scripts.run_phases phase4 full`) regenerates everything from scratch.
 
 ---
 

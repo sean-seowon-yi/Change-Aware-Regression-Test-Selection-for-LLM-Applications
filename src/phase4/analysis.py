@@ -140,13 +140,61 @@ def _load_detail_metrics(path: Path) -> list[dict]:
     return records
 
 
+def paired_recall_series(
+    rows_a: dict[str, dict],
+    rows_b: dict[str, dict],
+    version_ids: Sequence[str],
+) -> tuple[list[float], list[float]]:
+    """Aligned per-version recalls for paired tests.
+
+    Uses ``effective_recall`` only when **both** sides expose it for **every**
+    version in *version_ids* (avoids mixing deployment-adjusted and single-pass
+    recalls).  Otherwise uses ``recall_with_sentinel`` / ``recall_predictor``.
+    """
+    if not version_ids:
+        return [], []
+
+    use_effective = all(
+        rows_a[v].get("effective_recall") is not None
+        and rows_b[v].get("effective_recall") is not None
+        for v in version_ids
+    )
+    if use_effective:
+        return (
+            [float(rows_a[v]["effective_recall"]) for v in version_ids],
+            [float(rows_b[v]["effective_recall"]) for v in version_ids],
+        )
+    return (
+        [
+            float(
+                rows_a[v].get(
+                    "recall_with_sentinel",
+                    rows_a[v].get("recall_predictor", 0),
+                ),
+            )
+            for v in version_ids
+        ],
+        [
+            float(
+                rows_b[v].get(
+                    "recall_with_sentinel",
+                    rows_b[v].get("recall_predictor", 0),
+                ),
+            )
+            for v in version_ids
+        ],
+    )
+
+
 def compute_all_comparisons(
     domains: list[str] | None = None,
 ) -> dict:
     """Run all pairwise comparisons from stored evaluation results.
 
     Looks for detail JSONL files under ``results/selection/`` (Phase 2)
-    and ``results/phase3/`` (Phase 3) and compares per-version recalls.
+    and ``results/phase3/`` (Phase 3) and compares per-version recalls via
+    :func:`paired_recall_series` (effective recall when both sides have it
+    for every version; otherwise single-pass recall).
 
     Returns a dict keyed by comparison name containing test statistics.
     """
@@ -193,8 +241,9 @@ def compute_all_comparisons(
                 if len(common_vids) < 5:
                     continue
 
-                rule_recalls = [rule_by_vid[v].get("recall_with_sentinel", rule_by_vid[v].get("recall_predictor", 0)) for v in common_vids]
-                learned_recalls = [learned_by_vid[v].get("recall_with_sentinel", learned_by_vid[v].get("recall_predictor", 0)) for v in common_vids]
+                rule_recalls, learned_recalls = paired_recall_series(
+                    rule_by_vid, learned_by_vid, common_vids,
+                )
 
                 comp_key = f"learned_{model_type}_{domain}_{split}_vs_rule"
                 comparisons[comp_key] = paired_comparison(
@@ -222,8 +271,7 @@ def compute_all_comparisons(
                 common = sorted(set(recs_a) & set(recs_b))
                 if len(common) < 5:
                     continue
-                recalls_a = [recs_a[v].get("recall_with_sentinel", 0) for v in common]
-                recalls_b = [recs_b[v].get("recall_with_sentinel", 0) for v in common]
+                recalls_a, recalls_b = paired_recall_series(recs_a, recs_b, common)
                 comp_key = f"{ma}_vs_{mb}_{domain}_{split}"
                 comparisons[comp_key] = paired_comparison(recalls_a, recalls_b)
                 comparisons[comp_key]["n_versions"] = len(common)

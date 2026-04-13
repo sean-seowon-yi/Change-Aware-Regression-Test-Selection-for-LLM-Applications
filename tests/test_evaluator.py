@@ -22,6 +22,8 @@ from src.phase2.evaluator import (
     baseline_full_rerun,
     baseline_monitor_heuristic,
     baseline_random_50,
+    compute_effective_metrics,
+    effective_means_from_aggregate,
     load_ground_truth,
 )
 
@@ -56,11 +58,17 @@ def _make_version_metrics(
     changes: list[dict] | None = None,
     change_types_gt: list[str] | None = None,
     mag_max: float = 0.15,
+    effective_recall: float | None = None,
+    effective_call_reduction: float | None = None,
 ) -> VersionMetrics:
     if changes is None:
         changes = [{"unit_type": "format", "change_type": "modified", "magnitude": 0.15}]
     if change_types_gt is None:
         change_types_gt = ["format:modified"]
+    if effective_recall is None:
+        effective_recall = 1.0 if sentinel_hit else recall_sent
+    if effective_call_reduction is None:
+        effective_call_reduction = 0.0 if sentinel_hit else call_red
     return VersionMetrics(
         version_id=version_id,
         domain=domain,
@@ -79,6 +87,8 @@ def _make_version_metrics(
         change_types_gt=change_types_gt,
         magnitude_max=mag_max,
         mutation_category=_version_to_category(version_id),
+        effective_recall=effective_recall,
+        effective_call_reduction=effective_call_reduction,
     )
 
 
@@ -267,6 +277,74 @@ class TestAggregateGroup:
         m2 = _make_version_metrics(version_id="v02", recall_sent=0.5)
         result = _aggregate_group([m1, m2])
         assert result["versions_with_perfect_recall"] == 1
+
+
+# ---------------------------------------------------------------------------
+# Effective metrics
+# ---------------------------------------------------------------------------
+
+class TestComputeEffectiveMetrics:
+    def test_escalation(self):
+        r, c = compute_effective_metrics(
+            sentinel_hit=True, recall_with_sentinel=0.7, call_reduction=0.5,
+        )
+        assert r == 1.0 and c == 0.0
+
+    def test_no_escalation(self):
+        r, c = compute_effective_metrics(
+            sentinel_hit=False, recall_with_sentinel=0.85, call_reduction=0.4,
+        )
+        assert r == 0.85 and c == 0.4
+
+
+class TestEffectiveMeansFromAggregate:
+    def test_empty_aggregate(self):
+        assert effective_means_from_aggregate({}) == (0.0, 0.0)
+
+    def test_legacy_fallback(self):
+        er, ecr = effective_means_from_aggregate({
+            "mean_recall_with_sentinel": 0.88,
+            "mean_call_reduction": 0.42,
+        })
+        assert er == pytest.approx(0.88)
+        assert ecr == pytest.approx(0.42)
+
+    def test_prefers_effective_when_present(self):
+        er, ecr = effective_means_from_aggregate({
+            "mean_effective_recall": 0.99,
+            "mean_effective_call_reduction": 0.1,
+            "mean_recall_with_sentinel": 0.5,
+            "mean_call_reduction": 0.6,
+        })
+        assert er == pytest.approx(0.99)
+        assert ecr == pytest.approx(0.1)
+
+
+class TestEffectiveMetrics:
+    def test_no_sentinel_hit_matches_single_pass(self):
+        m = _make_version_metrics(
+            recall_sent=0.9, call_red=0.4, sentinel_hit=False,
+        )
+        assert m.effective_recall == 0.9
+        assert m.effective_call_reduction == 0.4
+
+    def test_sentinel_hit_triggers_full_rerun(self):
+        m = _make_version_metrics(
+            recall_sent=0.8, call_red=0.5, sentinel_hit=True,
+        )
+        assert m.effective_recall == 1.0
+        assert m.effective_call_reduction == 0.0
+
+    def test_aggregate_effective_metrics(self):
+        m1 = _make_version_metrics(
+            recall_sent=0.8, call_red=0.6, sentinel_hit=False,
+        )
+        m2 = _make_version_metrics(
+            version_id="v02", recall_sent=0.7, call_red=0.5, sentinel_hit=True,
+        )
+        result = _aggregate_group([m1, m2])
+        assert result["mean_effective_recall"] == pytest.approx(0.9, abs=0.01)
+        assert result["mean_effective_call_reduction"] == pytest.approx(0.3, abs=0.01)
 
 
 # ---------------------------------------------------------------------------

@@ -41,7 +41,9 @@ def plot_pareto_fronts(
 ) -> None:
     """Three-panel Pareto front (one per domain).
 
-    *threshold_data* maps ``domain -> {selector_label -> [{threshold, mean_recall_with_sentinel, mean_call_reduction}]}``
+    *threshold_data* maps domain → selector → curve points.  Each point may include
+    ``mean_effective_recall`` / ``mean_effective_call_reduction`` (preferred) or
+    legacy ``mean_recall_with_sentinel`` / ``mean_call_reduction``.
     """
     _apply_style()
     import matplotlib.pyplot as plt
@@ -53,13 +55,28 @@ def plot_pareto_fronts(
     for idx, domain in enumerate(domains):
         ax = axes[0, idx]
         for label, curve in sorted(threshold_data[domain].items()):
-            recalls = [r.get("mean_recall_with_sentinel", r.get("recall", 0)) for r in curve]
-            reductions = [r.get("mean_call_reduction", r.get("call_reduction", 0)) for r in curve]
+            use_effective = bool(curve) and all(
+                r.get("mean_effective_recall") is not None
+                and r.get("mean_effective_call_reduction") is not None
+                for r in curve
+            )
+            if use_effective:
+                recalls = [float(r["mean_effective_recall"]) for r in curve]
+                reductions = [float(r["mean_effective_call_reduction"]) for r in curve]
+            else:
+                recalls = [
+                    r.get("mean_recall_with_sentinel", r.get("recall", 0))
+                    for r in curve
+                ]
+                reductions = [
+                    r.get("mean_call_reduction", r.get("call_reduction", 0))
+                    for r in curve
+                ]
             ax.plot(reductions, recalls, label=label, marker="o", markersize=2, linewidth=1.5)
         ax.axhline(y=0.95, color="gray", linestyle="--", alpha=0.5, label="95% recall target")
         ax.set_xlabel("Call Reduction")
         if idx == 0:
-            ax.set_ylabel("Recall (with sentinel)")
+            ax.set_ylabel("Recall")
         ax.set_title(domain.replace("_", " ").title())
         ax.set_xlim(-0.02, 1.02)
         ax.set_ylim(-0.02, 1.05)

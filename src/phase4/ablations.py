@@ -22,6 +22,7 @@ from src.phase2.evaluator import (
     VersionMetrics,
     _version_to_category,
     aggregate_results,
+    compute_effective_metrics,
     list_version_ids,
     load_base_prompt,
     load_ground_truth,
@@ -233,9 +234,13 @@ def sentinel_fraction_sweep(
     if version_filter == "temporal_test":
         version_ids = [v for v in version_ids if int(re.search(r"\d+", v).group()) > 50]
 
+    if not version_ids:
+        return []
+
     results: list[dict] = []
     for frac in fractions:
         recalls, reductions, sentinel_hits, misses_count = [], [], [], []
+        eff_recalls, eff_reductions = [], []
         for vid in version_ids:
             version_prompt = load_version_prompt(domain, vid)
             res = select_tests_learned(
@@ -254,9 +259,18 @@ def sentinel_fraction_sweep(
 
             pred_hit = impacted & res.predicted_ids
             sent_hit = impacted & res.sentinel_ids
+            sentinel_hit = len(sent_hit) > 0
             if n_i > 0 and len(pred_hit) < n_i:
-                sentinel_hits.append(len(sent_hit) > 0)
+                sentinel_hits.append(sentinel_hit)
                 misses_count.append(n_i - len(hit))
+
+            er, ecr = compute_effective_metrics(
+                sentinel_hit=sentinel_hit,
+                recall_with_sentinel=recall,
+                call_reduction=res.call_reduction,
+            )
+            eff_recalls.append(er)
+            eff_reductions.append(ecr)
 
         catch_rate = (
             sum(sentinel_hits) / len(sentinel_hits)
@@ -269,6 +283,8 @@ def sentinel_fraction_sweep(
             "sentinel_fraction": frac,
             "mean_recall": round(float(np.mean(recalls)), 4),
             "mean_call_reduction": round(float(np.mean(reductions)), 4),
+            "mean_effective_recall": round(float(np.mean(eff_recalls)), 4),
+            "mean_effective_call_reduction": round(float(np.mean(eff_reductions)), 4),
             "sentinel_catch_rate": round(catch_rate, 4) if catch_rate is not None else None,
             "escalation_rate": round(escalation_rate, 4),
             "n_versions_with_misses": len(sentinel_hits),
@@ -306,9 +322,13 @@ def magnitude_threshold_sweep(
     if version_filter == "temporal_test":
         version_ids = [v for v in version_ids if int(re.search(r"\d+", v).group()) > 50]
 
+    if not version_ids:
+        return []
+
     results: list[dict] = []
     for mag_thresh in thresholds:
         recalls, reductions, for_rates = [], [], []
+        eff_recalls, eff_reductions = [], []
         for vid in version_ids:
             version_prompt = load_version_prompt(domain, vid)
             res = select_tests_learned(
@@ -329,11 +349,21 @@ def magnitude_threshold_sweep(
             recalls.append(recall)
             reductions.append(res.call_reduction)
             for_rates.append(for_rate)
+            sentinel_hit = len(impacted & res.sentinel_ids) > 0
+            er, ecr = compute_effective_metrics(
+                sentinel_hit=sentinel_hit,
+                recall_with_sentinel=recall,
+                call_reduction=res.call_reduction,
+            )
+            eff_recalls.append(er)
+            eff_reductions.append(ecr)
 
         results.append({
             "magnitude_threshold": mag_thresh,
             "mean_recall": round(float(np.mean(recalls)), 4),
             "mean_call_reduction": round(float(np.mean(reductions)), 4),
+            "mean_effective_recall": round(float(np.mean(eff_recalls)), 4),
+            "mean_effective_call_reduction": round(float(np.mean(eff_reductions)), 4),
             "mean_for": round(float(np.mean(for_rates)), 4),
         })
     return results
@@ -380,8 +410,20 @@ def change_complexity_breakdown(
         n_i = len(impacted)
         hit = impacted & res.selected_ids
         recall = len(hit) / n_i if n_i > 0 else 1.0
+        sentinel_hit = len(impacted & res.sentinel_ids) > 0
+        eff_r, eff_cr = compute_effective_metrics(
+            sentinel_hit=sentinel_hit,
+            recall_with_sentinel=recall,
+            call_reduction=res.call_reduction,
+        )
 
-        entry = {"recall": recall, "call_reduction": res.call_reduction, "n_impacted": n_i}
+        entry = {
+            "recall": recall,
+            "call_reduction": res.call_reduction,
+            "effective_recall": eff_r,
+            "effective_call_reduction": eff_cr,
+            "n_impacted": n_i,
+        }
         if n_types <= 1:
             buckets["1_type"].append(entry)
         elif n_types == 2:
@@ -399,6 +441,12 @@ def change_complexity_breakdown(
             "count": len(entries),
             "mean_recall": round(float(np.mean([e["recall"] for e in entries])), 4),
             "mean_call_reduction": round(float(np.mean([e["call_reduction"] for e in entries])), 4),
+            "mean_effective_recall": round(
+                float(np.mean([e["effective_recall"] for e in entries])), 4,
+            ),
+            "mean_effective_call_reduction": round(
+                float(np.mean([e["effective_call_reduction"] for e in entries])), 4,
+            ),
             "mean_n_impacted": round(float(np.mean([e["n_impacted"] for e in entries])), 1),
         })
     return results
